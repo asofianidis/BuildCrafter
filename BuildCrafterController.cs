@@ -24,6 +24,7 @@ internal static class BuildCrafterController
     private enum CraftView { Loadout, Skills }
     private enum ItemContextView { Details, Compare, Replace }
     private enum ItemToolView { Items, Attachments, Substats }
+    private enum SkillContextView { Details, Compare }
 
     private readonly struct SkillBudget
     {
@@ -45,6 +46,7 @@ internal static class BuildCrafterController
     private static CraftView _craftView = CraftView.Loadout;
     private static ItemContextView _itemContextView = ItemContextView.Details;
     private static ItemToolView _itemToolView = ItemToolView.Items;
+    private static SkillContextView _skillContextView = SkillContextView.Details;
     private static BuildDocument _current = new();
     private static IReadOnlyList<BuildDocument> _localBuilds = Array.Empty<BuildDocument>();
     private static IReadOnlyList<CommunityBuildSummary> _communityBuilds = Array.Empty<CommunityBuildSummary>();
@@ -61,6 +63,9 @@ internal static class BuildCrafterController
     private static PlannedItem _comparisonItem;
     private static BuildCatalogEntry _comparisonResolved;
     private static IReadOnlyList<string> _comparisonStatLines = Array.Empty<string>();
+    private static string _comparisonSkillId = string.Empty;
+    private static int _comparisonSkillLevel;
+    private static IReadOnlyList<string> _comparisonSkillStatLines = Array.Empty<string>();
     private static int _selectedSubstatIndex = -1;
     private static CatalogKind _pickerKind = CatalogKind.Equipment;
     private static GameObject _canvasObject;
@@ -127,7 +132,7 @@ internal static class BuildCrafterController
         }
         if (!IsTextInputFocused() && Plugin.Settings.CompareHotkey.Value.IsDown())
         {
-            CompareHoveredItem();
+            CompareHoveredSelection();
             return;
         }
         if (!_open)
@@ -526,7 +531,12 @@ internal static class BuildCrafterController
             BuildCrafterUi.AddLayout(row, 58f);
             Button select = row.AddComponent<Button>();
             select.targetGraphic = row.GetComponent<Image>();
-            BuildCrafterUi.Wire(select, () => { _selectedSkill = skill.Id; RenderCraft(); });
+            BuildCrafterUi.Wire(select, () =>
+            {
+                _selectedSkill = skill.Id;
+                _skillContextView = SkillContextView.Details;
+                RenderCraft();
+            });
             AddCenteredCatalogIcon(row.transform, "SkillIcon", skill.Icon, 8f, 42f);
             TextMeshProUGUI text = _ui.TextBlock("Name", row.transform,
                 $"{Escape(skill.Name)}\n<size=78%><color=#91A0A3>{Escape(SkillSubtitle(skill))}</color></size>",
@@ -962,7 +972,9 @@ internal static class BuildCrafterController
     private static void RenderSkillContext(Transform panel)
     {
         BuildCatalogEntry skill = CurrentSkillEntries().FirstOrDefault(entry =>
-            entry.Id.Equals(_selectedSkill, StringComparison.OrdinalIgnoreCase));
+            entry.Id.Equals(_selectedSkill, StringComparison.OrdinalIgnoreCase))
+            ?? (_comparisonSkillId.Equals(_selectedSkill, StringComparison.OrdinalIgnoreCase)
+                ? GameCatalog.Resolve(_selectedSkill, CatalogKind.Skill) : null);
         if (skill is null)
         {
             AddSectionHeading(panel, "SKILL NOTES", "Nothing selected", -18f);
@@ -970,25 +982,104 @@ internal static class BuildCrafterController
             return;
         }
         int level = _current.Skills.TryGetValue(skill.Id, out int value) ? value : 0;
-        AddSectionHeading(panel, skill.Name.ToUpperInvariant(), $"Level {level} of {skill.MaxLevel}", -18f);
-        AddTopCatalogIcon(panel, "SkillIcon", skill.Icon, 20f, -76f, 60f);
+        bool hasComparison = _comparisonSkillId.Equals(skill.Id, StringComparison.OrdinalIgnoreCase);
+        if (_skillContextView == SkillContextView.Compare && !hasComparison)
+            _skillContextView = SkillContextView.Details;
+        string subheading = hasComparison
+            ? $"Build Lv {level} vs in-game Lv {_comparisonSkillLevel}"
+            : $"Level {level} of {skill.MaxLevel}";
+        AddSectionHeading(panel, skill.Name.ToUpperInvariant(), subheading, -18f);
+        if (hasComparison)
+            AddSkillContextTabs(panel);
+        if (_skillContextView == SkillContextView.Compare && hasComparison)
+        {
+            RenderSkillComparison(panel, skill, level);
+            return;
+        }
+
+        float offset = hasComparison ? 54f : 0f;
+        AddTopCatalogIcon(panel, "SkillIcon", skill.Icon, 20f, -76f - offset, 60f);
         TextMeshProUGUI meta = _ui.TextBlock("SkillMeta", panel, Escape(SkillSubtitle(skill)), 12f,
             BuildCrafterUi.TextMuted, TextAlignmentOptions.TopLeft, richText: true);
-        PlaceTop(meta.rectTransform, 94f, -78f, -20f, 58f);
+        PlaceTop(meta.rectTransform, 94f, -78f - offset, -20f, 58f);
         TextMeshProUGUI description = _ui.TextBlock("Description", panel,
             string.IsNullOrWhiteSpace(skill.Description)
                 ? "No description is included in the current client data." : Escape(skill.Description),
             15f, BuildCrafterUi.Text, TextAlignmentOptions.TopLeft, richText: true);
         description.rectTransform.offsetMin = new Vector2(20f, 280f);
-        description.rectTransform.offsetMax = new Vector2(-20f, -206f);
-        AddActionButton(panel, "Minus", "−1", 20f, -148f, 86f, 38f,
+        description.rectTransform.offsetMax = new Vector2(-20f, -206f - offset);
+        AddActionButton(panel, "Minus", "−1", 20f, -148f - offset, 86f, 38f,
             () => SetSkillLevel(skill, level - 1));
-        AddActionButton(panel, "Plus", "+1", 114f, -148f, 86f, 38f,
+        AddActionButton(panel, "Plus", "+1", 114f, -148f - offset, 86f, 38f,
             () => SetSkillLevel(skill, level + 1), true);
-        AddActionButton(panel, "Max", "MAX", 208f, -148f, 86f, 38f,
+        AddActionButton(panel, "Max", "MAX", 208f, -148f - offset, 86f, 38f,
             () => SetSkillLevel(skill, skill.MaxLevel));
-        AddActionButton(panel, "Reset", "RESET", 302f, -148f, 116f, 38f,
+        AddActionButton(panel, "Reset", "RESET", 302f, -148f - offset, 116f, 38f,
             () => SetSkillLevel(skill, 0));
+    }
+
+    private static void AddSkillContextTabs(Transform panel)
+    {
+        Button details = _ui.Button("SkillDetailsTab", panel, "BUILD DETAILS", () =>
+        {
+            _skillContextView = SkillContextView.Details;
+            RenderCraft();
+        }, selected: _skillContextView == SkillContextView.Details, fontSize: 12f);
+        PlaceTopFraction(details.GetComponent<RectTransform>(), 0f, 0.5f,
+            -68f, 38f, 18f, 4f);
+
+        Button compare = _ui.Button("SkillCompareTab", panel, "COMPARE", () =>
+        {
+            _skillContextView = SkillContextView.Compare;
+            RenderCraft();
+        }, selected: _skillContextView == SkillContextView.Compare, fontSize: 12f);
+        PlaceTopFraction(compare.GetComponent<RectTransform>(), 0.5f, 1f,
+            -68f, 38f, 4f, 18f);
+    }
+
+    private static void RenderSkillComparison(Transform panel, BuildCatalogEntry skill,
+        int plannedLevel)
+    {
+        AddSkillComparisonSummary(panel, "BUILD", skill, plannedLevel,
+            0f, 0.5f, BuildCrafterUi.Accent);
+        AddSkillComparisonSummary(panel, "IN GAME", skill, _comparisonSkillLevel,
+            0.5f, 1f, BuildCrafterUi.Positive);
+
+        GameObject divider = _ui.DividerLine("SkillComparisonDivider", panel);
+        RectTransform dividerRect = divider.GetComponent<RectTransform>();
+        dividerRect.anchorMin = new Vector2(0.5f, 0f);
+        dividerRect.anchorMax = new Vector2(0.5f, 1f);
+        dividerRect.offsetMin = new Vector2(-0.5f, 18f);
+        dividerRect.offsetMax = new Vector2(0.5f, -118f);
+
+        IReadOnlyList<string> plannedLines = plannedLevel <= 0
+            ? new[] { "This skill is not selected in the loaded build." }
+            : NativeSkillStatLines(skill.Id, plannedLevel, null, skill.Description);
+        IReadOnlyList<string> hoveredLines = _comparisonSkillStatLines.Count > 0
+            ? _comparisonSkillStatLines
+            : NativeSkillStatLines(skill.Id, _comparisonSkillLevel, null, skill.Description);
+        var plannedSet = new HashSet<string>(plannedLines, StringComparer.OrdinalIgnoreCase);
+        var hoveredSet = new HashSet<string>(hoveredLines, StringComparer.OrdinalIgnoreCase);
+        AddComparisonStats(panel, plannedLines, hoveredSet, 0f, 0.5f,
+            plannedLevel <= 0 ? BuildCrafterUi.TextMuted : BuildCrafterUi.Warning);
+        AddComparisonStats(panel, hoveredLines, plannedSet, 0.5f, 1f,
+            BuildCrafterUi.Positive);
+    }
+
+    private static void AddSkillComparisonSummary(Transform panel, string label,
+        BuildCatalogEntry skill, int level, float minX, float maxX, Color accent)
+    {
+        TextMeshProUGUI labelText = _ui.TextBlock(label + "SkillLabel", panel, label, 10.5f,
+            accent, TextAlignmentOptions.Center, FontStyles.Bold);
+        PlaceTopFraction(labelText.rectTransform, minX, maxX, -120f, 20f, 10f, 10f);
+        AddFractionCatalogIcon(panel, label + "SkillIcon", skill.Icon,
+            (minX + maxX) * 0.5f, -146f, 52f);
+        string levelText = level <= 0 ? "Not selected" : $"Level {level} of {skill.MaxLevel}";
+        TextMeshProUGUI detail = _ui.TextBlock(label + "SkillDetail", panel,
+            $"<b>{Escape(skill.Name)}</b>\n<size=78%><color=#91A0A3>{Escape(levelText)}</color></size>",
+            12.5f, BuildCrafterUi.Text, TextAlignmentOptions.Top,
+            FontStyles.Normal, richText: true);
+        PlaceTopFraction(detail.rectTransform, minX, maxX, -204f, 66f, 10f, 10f);
     }
 
     private static void RenderLocal()
@@ -2110,18 +2201,43 @@ internal static class BuildCrafterController
         rect.offsetMax = new Vector2(-rightInset, top);
     }
 
-    private static void CompareHoveredItem()
+    private static void CompareHoveredSelection()
     {
+        if (TryGetHoveredSkill(out BuildCatalogEntry skill, out int hoveredLevel,
+            out IReadOnlyList<string> skillStatLines))
+        {
+            ClearItemComparison();
+            _comparisonSkillId = skill.Id;
+            _comparisonSkillLevel = Math.Clamp(hoveredLevel, 0, skill.MaxLevel);
+            _comparisonSkillStatLines = skillStatLines;
+            _section = Section.Craft;
+            _craftView = CraftView.Skills;
+            _selectedSkill = skill.Id;
+            _selectedSlot = string.Empty;
+            _skillContextView = SkillContextView.Compare;
+            if (!_open)
+                Open();
+            else
+                Render();
+
+            int plannedLevel = _current.Skills.TryGetValue(skill.Id, out int selectedLevel)
+                ? selectedLevel : 0;
+            SetStatus($"Comparing {skill.Name}: build Lv {plannedLevel}, in-game Lv {_comparisonSkillLevel}.",
+                BuildCrafterUi.Positive);
+            return;
+        }
+
         if (!TryGetHoveredComparison(out PlannedItem hovered, out BuildCatalogEntry resolved,
             out string slot, out IReadOnlyList<string> statLines))
         {
             if (!_open)
                 Open();
-            SetStatus("Hover equipment or an artifact, then press the compare hotkey.",
+            SetStatus("Hover a skill, equipment item, or artifact, then press the compare hotkey.",
                 BuildCrafterUi.Warning);
             return;
         }
 
+        ClearSkillComparison();
         _comparisonItem = hovered;
         _comparisonResolved = resolved;
         _comparisonSlot = slot;
@@ -2146,12 +2262,94 @@ internal static class BuildCrafterController
 
     private static void ClearComparison()
     {
+        ClearItemComparison();
+        ClearSkillComparison();
+    }
+
+    private static void ClearItemComparison()
+    {
         _comparisonSlot = string.Empty;
         _comparisonItem = null;
         _comparisonResolved = null;
         _comparisonStatLines = Array.Empty<string>();
         if (_itemContextView == ItemContextView.Compare)
             _itemContextView = ItemContextView.Details;
+    }
+
+    private static void ClearSkillComparison()
+    {
+        _comparisonSkillId = string.Empty;
+        _comparisonSkillLevel = 0;
+        _comparisonSkillStatLines = Array.Empty<string>();
+        if (_skillContextView == SkillContextView.Compare)
+            _skillContextView = SkillContextView.Details;
+    }
+
+    private static bool TryGetHoveredSkill(out BuildCatalogEntry resolved, out int level,
+        out IReadOnlyList<string> statLines)
+    {
+        resolved = null;
+        level = 0;
+        statLines = Array.Empty<string>();
+        EventSystem eventSystem = EventSystem.current;
+        if (eventSystem is null)
+            return false;
+
+        var pointer = new PointerEventData(eventSystem) { position = Input.mousePosition };
+        var hits = new Il2CppRaycastList();
+        eventSystem.RaycastAll(pointer, hits);
+        foreach (RaycastResult hit in hits)
+        {
+            GameObject target = hit.gameObject;
+            try
+            {
+                UISkillsItem treeItem = target?.GetComponentInParent<UISkillsItem>();
+                if (treeItem is not null)
+                {
+                    SkillData treeData = treeItem.GetDataWithChange() ?? treeItem.Data;
+                    if (TryResolveHoveredSkill(treeData, null, out resolved, out level,
+                        out statLines))
+                        return true;
+                }
+
+                UISkillButton hotbarItem = target?.GetComponentInParent<UISkillButton>();
+                SkillState state = hotbarItem?.Data;
+                if (state is not null)
+                {
+                    var hotbarData = new SkillData { Id = state.Id, Level = state.Level };
+                    if (TryResolveHoveredSkill(hotbarData, null, out resolved, out level,
+                        out statLines))
+                        return true;
+                }
+
+                UIInventoryItem uiItem = target?.GetComponentInParent<UIInventoryItem>();
+                if (uiItem?.Data?.TryCast<SkillData>() is { } popupData
+                    && TryResolveHoveredSkill(popupData, uiItem, out resolved, out level,
+                        out statLines))
+                    return true;
+            }
+            catch (Exception ex)
+            {
+                Plugin.Warning($"Could not read hovered skill data: {ex.Message}");
+            }
+        }
+        return false;
+    }
+
+    private static bool TryResolveHoveredSkill(SkillData data, UIInventoryItem uiItem,
+        out BuildCatalogEntry resolved, out int level, out IReadOnlyList<string> statLines)
+    {
+        resolved = null;
+        level = 0;
+        statLines = Array.Empty<string>();
+        if (data is null || string.IsNullOrWhiteSpace(data.Id))
+            return false;
+        resolved = GameCatalog.Resolve(data.Id, CatalogKind.Skill);
+        if (resolved is null)
+            return false;
+        level = Math.Max(0, data.Level);
+        statLines = NativeSkillStatLines(data, uiItem, resolved.Description);
+        return true;
     }
 
     private static bool TryGetHoveredComparison(out PlannedItem hovered,
@@ -2293,6 +2491,33 @@ internal static class BuildCrafterController
         return NativeDescriptionLines(description, uiItem);
     }
 
+    private static IReadOnlyList<string> NativeSkillStatLines(string skillId, int level,
+        UIInventoryItem uiItem, string fallbackDescription)
+    {
+        var data = new SkillData
+        {
+            Id = skillId ?? string.Empty,
+            Level = Math.Max(0, level)
+        };
+        return NativeSkillStatLines(data, uiItem, fallbackDescription);
+    }
+
+    private static IReadOnlyList<string> NativeSkillStatLines(SkillData data,
+        UIInventoryItem uiItem, string fallbackDescription)
+    {
+        string description = string.Empty;
+        try
+        {
+            if (data is not null)
+                description = Extensions.ToDescription(data);
+        }
+        catch (Exception ex)
+        {
+            Plugin.Warning($"Native skill stat formatting failed: {ex.Message}");
+        }
+        return NativeDescriptionLines(description, uiItem, fallbackDescription);
+    }
+
     private static IReadOnlyList<string> NativeArtifactStatLines(ArtifactData artifact,
         UIInventoryItem uiItem)
     {
@@ -2315,13 +2540,15 @@ internal static class BuildCrafterController
     }
 
     private static IReadOnlyList<string> NativeDescriptionLines(string description,
-        UIInventoryItem uiItem)
+        UIInventoryItem uiItem, string fallbackDescription = null)
     {
         if (string.IsNullOrWhiteSpace(description))
         {
             try { description = uiItem?.Description?.text ?? string.Empty; }
             catch { description = string.Empty; }
         }
+        if (string.IsNullOrWhiteSpace(description))
+            description = fallbackDescription ?? string.Empty;
         if (string.IsNullOrWhiteSpace(description))
             return Array.Empty<string>();
 

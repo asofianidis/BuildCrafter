@@ -6,7 +6,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>NevarisBuildCrafter</AssemblyName>
     <RootNamespace>NevarisBuildCrafter</RootNamespace>
-    <Version>1.2.2</Version>
+    <Version>1.3.0</Version>
     <GameDir Condition="'$(GameDir)' == ''">F:\SteamLibrary\steamapps\common\SpiritVale</GameDir>
     <InteropDir>$(GameDir)\BepInEx\interop</InteropDir>
     <BepInExCoreDir>$(GameDir)\BepInEx\core</BepInExCoreDir>

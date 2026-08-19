@@ -17,7 +17,7 @@ public sealed class Plugin : BasePlugin
 {
     public const string Guid = "alex.nevaris.buildcrafter";
     public const string Name = "Build Crafter";
-    public const string Version = "1.2.2";
+    public const string Version = "1.3.0";
 
     internal static ManualLogSource Logger = null!;
     internal static BuildCrafterSettings Settings = null!;
@@ -34,7 +34,7 @@ public sealed class Plugin : BasePlugin
         _harmony.PatchAll(Assembly.GetExecutingAssembly());
         BuildCrafterController.Initialize();
         Info($"{Name} {Version} loaded. Press {Settings.ToggleHotkey.Value} to plan, or hover " +
-            $"equipment and press {Settings.CompareHotkey.Value} to compare.");
+            $"a skill or item and press {Settings.CompareHotkey.Value} to compare.");
     }
 
     public override bool Unload()
@@ -67,7 +67,7 @@ internal sealed class BuildCrafterSettings
             "Open or close Build Crafter.");
         CompareHotkey = config.Bind("Hotkeys", "CompareHovered",
             new KeyboardShortcut(KeyCode.C, KeyCode.LeftAlt),
-            "Compare the equipment under the mouse cursor with its slot in the loaded build.");
+            "Compare the skill, equipment, or artifact under the mouse cursor with the loaded build.");
         UiScale = config.Bind("Display", "Scale", 1f,
             "Scale the Build Crafter window.");
         EnableCommunityBuilds = config.Bind("Community", "EnableSpiritValers", true,

@@ -45,7 +45,7 @@ internal static class McmIntegration
         if (bindHotkey is null)
         {
             page.AddHeader("HOTKEYS", $"Press {Plugin.Settings.ToggleHotkey.Value} to open or close. " +
-                $"Hover equipment and press {Plugin.Settings.CompareHotkey.Value} to compare it.");
+                $"Hover a skill or item and press {Plugin.Settings.CompareHotkey.Value} to compare it.");
             return;
         }
         page.AddHeader("HOTKEYS", "Hold modifiers first, press the main key last, then release.");
@@ -59,8 +59,8 @@ internal static class McmIntegration
         bindHotkey.Invoke(page, new object[]
         {
             Plugin.Settings.CompareHotkey,
-            "Compare hovered equipment",
-            "Compare the item under the cursor with its matching slot in the loaded build.",
+            "Compare hovered selection",
+            "Compare the skill or item under the cursor with its selection in the loaded build.",
             null
         });
     }
