@@ -161,6 +161,16 @@ internal static class GameCatalog
             .ToList();
     }
 
+    internal static string FriendlyStatText(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return string.Empty;
+        string spaced = Regex.Replace(value, "(?<=[a-z])(?=Mult\\b)", " ",
+            RegexOptions.IgnoreCase);
+        return Regex.Replace(spaced, "\\bMult\\.?(?=\\s|:|$)", "Multiplier",
+            RegexOptions.IgnoreCase);
+    }
+
     internal static string EffectiveBaseClass(string className, string requestedBaseClass)
     {
         string parent = ParentClassOf(className);
@@ -616,6 +626,7 @@ internal static class GameCatalog
         if (string.IsNullOrWhiteSpace(value))
             return string.Empty;
         string spaced = Regex.Replace(value.Replace('_', ' '), "(?<=[a-z0-9])(?=[A-Z])", " ");
-        return CultureInfo.CurrentCulture.TextInfo.ToTitleCase(spaced.ToLowerInvariant());
+        return FriendlyStatText(
+            CultureInfo.CurrentCulture.TextInfo.ToTitleCase(spaced.ToLowerInvariant()));
     }
 }

@@ -17,7 +17,7 @@ public sealed class Plugin : BasePlugin
 {
     public const string Guid = "alex.nevaris.buildcrafter";
     public const string Name = "Build Crafter";
-    public const string Version = "1.2.1";
+    public const string Version = "1.2.2";
 
     internal static ManualLogSource Logger = null!;
     internal static BuildCrafterSettings Settings = null!;

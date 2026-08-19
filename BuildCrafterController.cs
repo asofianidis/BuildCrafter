@@ -690,6 +690,7 @@ internal static class BuildCrafterController
 
     private static void AddComparisonStatRow(Transform parent, string line, Color color)
     {
+        line = GameCatalog.FriendlyStatText(line);
         GameObject row = _ui.Rect("ComparisonStat", parent, Vector2.zero, Vector2.one,
             Vector2.zero, Vector2.zero);
         float height = line.Length > 48 ? 68f : line.Length > 28 ? 48f : 32f;
@@ -1588,7 +1589,8 @@ internal static class BuildCrafterController
         if (string.IsNullOrWhiteSpace(skillId))
             return "Unknown skill";
         string spaced = skillId.Replace('-', ' ').Replace('_', ' ').Trim();
-        return System.Globalization.CultureInfo.CurrentCulture.TextInfo.ToTitleCase(spaced);
+        return GameCatalog.FriendlyStatText(
+            System.Globalization.CultureInfo.CurrentCulture.TextInfo.ToTitleCase(spaced));
     }
 
     private static void PruneInvalidSkills()
@@ -2004,6 +2006,7 @@ internal static class BuildCrafterController
 
     private static void AddItemStatRow(Transform parent, string line)
     {
+        line = GameCatalog.FriendlyStatText(line);
         GameObject row = _ui.Rect("Stat", parent, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
         float height = line.Length > 82 ? 54f : line.Length > 46 ? 38f : 26f;
         BuildCrafterUi.AddLayout(row, height);
@@ -2326,7 +2329,7 @@ internal static class BuildCrafterController
         plain = RichTextTag.Replace(plain, string.Empty);
         plain = WebUtility.HtmlDecode(plain);
         return plain.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
-            .Select(line => line.Trim().TrimStart('•').Trim())
+            .Select(line => GameCatalog.FriendlyStatText(line.Trim().TrimStart('•').Trim()))
             .Where(line => !string.IsNullOrWhiteSpace(line))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
