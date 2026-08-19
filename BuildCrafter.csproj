@@ -6,7 +6,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>NevarisBuildCrafter</AssemblyName>
     <RootNamespace>NevarisBuildCrafter</RootNamespace>
-    <Version>1.1.1</Version>
+    <Version>1.2.1</Version>
     <GameDir Condition="'$(GameDir)' == ''">F:\SteamLibrary\steamapps\common\SpiritVale</GameDir>
     <InteropDir>$(GameDir)\BepInEx\interop</InteropDir>
     <BepInExCoreDir>$(GameDir)\BepInEx\core</BepInExCoreDir>
@@ -37,6 +37,10 @@
     </Reference>
     <Reference Include="Il2Cppmscorlib">
       <HintPath>$(InteropDir)\Il2Cppmscorlib.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Il2CppSystem.Core">
+      <HintPath>$(InteropDir)\Il2CppSystem.Core.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <Reference Include="Assembly-CSharp">

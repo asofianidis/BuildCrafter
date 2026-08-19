@@ -14,7 +14,7 @@ internal static class McmIntegration
             Plugin.Version);
 
         page.AddHeader("BUILDER", "Build choices are rebuilt from the installed game data on world entry.");
-        AddHotkeyControl(page);
+        AddHotkeyControls(page);
 
         page.AddHeader("DISPLAY");
         page.BindFloatSlider(Plugin.Settings.UiScale, "Window scale", 0.75f, 1.15f, 0.05f,
@@ -36,7 +36,7 @@ internal static class McmIntegration
             "Reload equipment, artifacts, cards, gems, and skills from the client.");
     }
 
-    private static void AddHotkeyControl(ModPage page)
+    private static void AddHotkeyControls(ModPage page)
     {
         MethodInfo bindHotkey = typeof(ModPage).GetMethod("BindHotkey",
             BindingFlags.Instance | BindingFlags.Public, null,
@@ -44,7 +44,8 @@ internal static class McmIntegration
                 typeof(Action<KeyboardShortcut>) }, null);
         if (bindHotkey is null)
         {
-            page.AddHeader("HOTKEY", $"Press {Plugin.Settings.ToggleHotkey.Value} to open or close.");
+            page.AddHeader("HOTKEYS", $"Press {Plugin.Settings.ToggleHotkey.Value} to open or close. " +
+                $"Hover equipment and press {Plugin.Settings.CompareHotkey.Value} to compare it.");
             return;
         }
         page.AddHeader("HOTKEYS", "Hold modifiers first, press the main key last, then release.");
@@ -53,6 +54,13 @@ internal static class McmIntegration
             Plugin.Settings.ToggleHotkey,
             "Open Build Crafter",
             "Open or close the build workspace.",
+            null
+        });
+        bindHotkey.Invoke(page, new object[]
+        {
+            Plugin.Settings.CompareHotkey,
+            "Compare hovered equipment",
+            "Compare the item under the cursor with its matching slot in the loaded build.",
             null
         });
     }

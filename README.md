@@ -8,11 +8,12 @@ An in-game build planning workspace that reads the current SpiritVale client dat
 - Inspect native item stats, effects, artifact bonuses, and imported substats directly in the selected-item workbench.
 - Switch the equipment sidebar between focused Details and Replace & Tools tabs.
 - Add, select, change, value-edit, and remove up to six planned equipment or artifact substats.
+- Hover equipment or an artifact and press the configurable compare hotkey to inspect it beside the matching slot in the loaded build.
 - Search compatible choices from the installed game data rather than a bundled frozen database.
 - Save any number of builds as readable JSON files on the local machine, then reopen or duplicate them in game.
 - Browse and import public builds from `spiritvalers.com` as editable local copies. Opening the community workspace and every debounced search issue a fresh server query instead of filtering only previously downloaded rows.
 - Optional Item Encyclopedia handoff opens the selected item directly on its encyclopedia page.
-- Keyboard support for `Escape`, `Ctrl+S`, and `Ctrl+F`, plus configurable UI scaling.
+- Keyboard support for `Escape`, `Ctrl+S`, `Ctrl+F`, and the default `Left Alt+C` item comparison shortcut, plus configurable hotkeys and UI scaling.
 
 ## Install
 

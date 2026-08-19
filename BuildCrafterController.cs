@@ -1,8 +1,12 @@
 using System.Collections.Concurrent;
+using System.Net;
+using System.Text.RegularExpressions;
+using Il2CppInterop.Runtime.InteropTypes;
 using TMPro;
 using UnityEngine;
 using UnityEngine.EventSystems;
 using UnityEngine.UI;
+using Il2CppRaycastList = Il2CppSystem.Collections.Generic.List<UnityEngine.EventSystems.RaycastResult>;
 using Object = UnityEngine.Object;
 
 namespace NevarisBuildCrafter;
@@ -13,10 +17,12 @@ internal static class BuildCrafterController
     private const float WindowHeight = 920f;
     private static readonly string[] AttributeNames = { "STR", "VIT", "AGI", "DEX", "INT", "LUK" };
     private static readonly ConcurrentQueue<Action> MainThread = new();
+    private static readonly Regex RichTextTag = new("<[^>]+>", RegexOptions.Compiled);
+    private static readonly Regex RichTextBreak = new("<br\\s*/?>", RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     private enum Section { Craft, Local, Community }
     private enum CraftView { Loadout, Skills }
-    private enum ItemContextView { Details, Replace }
+    private enum ItemContextView { Details, Compare, Replace }
     private enum ItemToolView { Items, Attachments, Substats }
 
     private readonly struct SkillBudget
@@ -51,6 +57,10 @@ internal static class BuildCrafterController
     private static string _pickerSearch = string.Empty;
     private static string _selectedSlot = string.Empty;
     private static string _selectedSkill = string.Empty;
+    private static string _comparisonSlot = string.Empty;
+    private static PlannedItem _comparisonItem;
+    private static BuildCatalogEntry _comparisonResolved;
+    private static IReadOnlyList<string> _comparisonStatLines = Array.Empty<string>();
     private static int _selectedSubstatIndex = -1;
     private static CatalogKind _pickerKind = CatalogKind.Equipment;
     private static GameObject _canvasObject;
@@ -84,6 +94,7 @@ internal static class BuildCrafterController
         _worldReady = false;
         _open = false;
         _localPlayer = null;
+        ClearComparison();
         DestroyUi();
     }
 
@@ -92,6 +103,7 @@ internal static class BuildCrafterController
         _worldReady = false;
         _open = false;
         _localPlayer = null;
+        ClearComparison();
         DestroyUi();
         while (MainThread.TryDequeue(out _)) { }
     }
@@ -112,6 +124,11 @@ internal static class BuildCrafterController
                 Close();
             else if (!IsBaseMenuOpen())
                 Open();
+        }
+        if (!IsTextInputFocused() && Plugin.Settings.CompareHotkey.Value.IsDown())
+        {
+            CompareHoveredItem();
+            return;
         }
         if (!_open)
             return;
@@ -200,6 +217,7 @@ internal static class BuildCrafterController
     {
         GameCatalog.Rebuild();
         ResolveBuildNames(_current);
+        ClearComparison();
         if (_open)
         {
             SetStatus("Game data refreshed.", BuildCrafterUi.Positive);
@@ -544,38 +562,142 @@ internal static class BuildCrafterController
         PlannedItem planned = artifactSlot
             ? (_current.Artifacts.TryGetValue(_selectedSlot, out PlannedArtifact art) ? art : null)
             : (_current.Equipment.TryGetValue(_selectedSlot, out PlannedItem equip) ? equip : null);
-        if (planned is null)
+        bool hasComparison = _comparisonItem is not null
+            && _comparisonSlot.Equals(_selectedSlot, StringComparison.OrdinalIgnoreCase);
+        if (planned is null && !hasComparison)
             _itemContextView = ItemContextView.Replace;
+        else if (_itemContextView == ItemContextView.Compare && !hasComparison)
+            _itemContextView = planned is null ? ItemContextView.Replace : ItemContextView.Details;
         AddSectionHeading(panel, BuildSlots.Label(_selectedSlot).ToUpperInvariant(),
-            planned is null ? "Choose an item" : DisplayName(planned), -18f);
+            hasComparison
+                ? (planned is null
+                    ? $"Empty slot vs {DisplayName(_comparisonItem)}"
+                    : $"{DisplayName(planned)} vs {DisplayName(_comparisonItem)}")
+                : planned is null ? "Choose an item" : DisplayName(planned), -18f);
 
-        AddItemContextTabs(panel, planned is not null);
+        AddItemContextTabs(panel, planned is not null, hasComparison);
         BuildCatalogEntry resolved = planned is null ? null : GameCatalog.Resolve(planned.ItemId,
             artifactSlot ? CatalogKind.Artifact : CatalogKind.Equipment)
             ?? GameCatalog.Resolve(planned.DisplayName,
                 artifactSlot ? CatalogKind.Artifact : CatalogKind.Equipment);
-        if (_itemContextView == ItemContextView.Details && planned is not null)
+        if (_itemContextView == ItemContextView.Compare && hasComparison)
+            RenderItemComparison(panel, planned, resolved, artifactSlot);
+        else if (_itemContextView == ItemContextView.Details && planned is not null)
             RenderItemDetails(panel, planned, resolved, artifactSlot);
         else
             RenderItemReplace(panel, planned, resolved, artifactSlot);
     }
 
-    private static void AddItemContextTabs(Transform panel, bool hasItem)
+    private static void AddItemContextTabs(Transform panel, bool hasItem, bool hasComparison)
     {
         Button details = _ui.Button("DetailsTab", panel, "DETAILS", () =>
         {
             _itemContextView = ItemContextView.Details;
             RenderCraft();
         }, selected: _itemContextView == ItemContextView.Details, fontSize: 12f);
-        PlaceTopFraction(details.GetComponent<RectTransform>(), 0f, 0.5f, -68f, 38f, 18f, 4f);
+        PlaceTopFraction(details.GetComponent<RectTransform>(), 0f,
+            hasComparison ? 0.3f : 0.5f, -68f, 38f, 18f, 4f);
         details.interactable = hasItem;
+
+        if (hasComparison)
+        {
+            Button compare = _ui.Button("CompareTab", panel, "COMPARE", () =>
+            {
+                _itemContextView = ItemContextView.Compare;
+                RenderCraft();
+            }, selected: _itemContextView == ItemContextView.Compare, fontSize: 12f);
+            PlaceTopFraction(compare.GetComponent<RectTransform>(), 0.3f, 0.62f,
+                -68f, 38f, 4f, 4f);
+        }
 
         Button replace = _ui.Button("ReplaceTab", panel, "REPLACE & TOOLS", () =>
         {
             _itemContextView = ItemContextView.Replace;
             RenderCraft();
         }, selected: _itemContextView == ItemContextView.Replace, fontSize: 12f);
-        PlaceTopFraction(replace.GetComponent<RectTransform>(), 0.5f, 1f, -68f, 38f, 4f, 18f);
+        PlaceTopFraction(replace.GetComponent<RectTransform>(), hasComparison ? 0.62f : 0.5f,
+            1f, -68f, 38f, 4f, 18f);
+    }
+
+    private static void RenderItemComparison(Transform panel, PlannedItem planned,
+        BuildCatalogEntry plannedResolved, bool artifactSlot)
+    {
+        AddComparisonSummary(panel, "BUILD", planned, plannedResolved, artifactSlot,
+            0f, 0.5f, BuildCrafterUi.Accent);
+        AddComparisonSummary(panel, "HOVERED", _comparisonItem, _comparisonResolved,
+            artifactSlot, 0.5f, 1f, BuildCrafterUi.Positive);
+
+        GameObject divider = _ui.DividerLine("ComparisonDivider", panel);
+        RectTransform dividerRect = divider.GetComponent<RectTransform>();
+        dividerRect.anchorMin = new Vector2(0.5f, 0f);
+        dividerRect.anchorMax = new Vector2(0.5f, 1f);
+        dividerRect.offsetMin = new Vector2(-0.5f, 18f);
+        dividerRect.offsetMax = new Vector2(0.5f, -118f);
+
+        IReadOnlyList<string> plannedLines = planned is null
+            ? new[] { "No item is planned for this slot." }
+            : ItemStatLines(plannedResolved, planned);
+        IReadOnlyList<string> hoveredLines = _comparisonStatLines.Count > 0
+            ? _comparisonStatLines
+            : ItemStatLines(_comparisonResolved, _comparisonItem);
+        var plannedSet = new HashSet<string>(plannedLines, StringComparer.OrdinalIgnoreCase);
+        var hoveredSet = new HashSet<string>(hoveredLines, StringComparer.OrdinalIgnoreCase);
+
+        AddComparisonStats(panel, plannedLines, hoveredSet, 0f, 0.5f,
+            planned is null ? BuildCrafterUi.TextMuted : BuildCrafterUi.Warning);
+        AddComparisonStats(panel, hoveredLines, plannedSet, 0.5f, 1f, BuildCrafterUi.Positive);
+    }
+
+    private static void AddComparisonSummary(Transform panel, string label, PlannedItem item,
+        BuildCatalogEntry resolved, bool artifactSlot, float minX, float maxX, Color accent)
+    {
+        TextMeshProUGUI labelText = _ui.TextBlock(label + "Label", panel, label, 10.5f,
+            accent, TextAlignmentOptions.Center, FontStyles.Bold);
+        PlaceTopFraction(labelText.rectTransform, minX, maxX, -120f, 20f, 10f, 10f);
+
+        AddFractionCatalogIcon(panel, label + "Icon", resolved?.Icon,
+            (minX + maxX) * 0.5f, -146f, 52f);
+        string itemName = item is null ? "Empty slot" : DisplayName(item);
+        string summary = item is null
+            ? "Nothing planned"
+            : $"Refine +{item.Refine}  •  {AttachmentSummary(item, artifactSlot)}";
+        TextMeshProUGUI detail = _ui.TextBlock(label + "Detail", panel,
+            $"<b>{Escape(itemName)}</b>\n<size=78%><color=#91A0A3>{Escape(summary)}</color></size>",
+            12.5f, BuildCrafterUi.Text, TextAlignmentOptions.Top,
+            FontStyles.Normal, richText: true);
+        PlaceTopFraction(detail.rectTransform, minX, maxX, -204f, 66f, 10f, 10f);
+    }
+
+    private static void AddComparisonStats(Transform panel, IReadOnlyList<string> lines,
+        HashSet<string> otherLines, float minX, float maxX, Color differenceColor)
+    {
+        TextMeshProUGUI heading = _ui.TextBlock("ComparisonStats", panel, "STATS & EFFECTS",
+            10.5f, BuildCrafterUi.TextMuted, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
+        PlaceTopFraction(heading.rectTransform, minX, maxX, -282f, 22f, 12f, 8f);
+
+        ScrollRect scroll = _ui.Scroll("ComparisonScroll", panel, out Transform content, 4f);
+        RectTransform rect = scroll.GetComponent<RectTransform>();
+        rect.anchorMin = new Vector2(minX, 0f);
+        rect.anchorMax = new Vector2(maxX, 1f);
+        rect.offsetMin = new Vector2(10f, 18f);
+        rect.offsetMax = new Vector2(-10f, -312f);
+        foreach (string line in lines)
+        {
+            Color color = otherLines.Contains(line) ? BuildCrafterUi.TextMuted : differenceColor;
+            AddComparisonStatRow(content, line, color);
+        }
+    }
+
+    private static void AddComparisonStatRow(Transform parent, string line, Color color)
+    {
+        GameObject row = _ui.Rect("ComparisonStat", parent, Vector2.zero, Vector2.one,
+            Vector2.zero, Vector2.zero);
+        float height = line.Length > 48 ? 68f : line.Length > 28 ? 48f : 32f;
+        BuildCrafterUi.AddLayout(row, height);
+        TextMeshProUGUI text = _ui.TextBlock("Text", row.transform, "• " + Escape(line),
+            11.5f, color, TextAlignmentOptions.TopLeft, richText: true);
+        text.rectTransform.offsetMin = new Vector2(2f, 3f);
+        text.rectTransform.offsetMax = new Vector2(-4f, -3f);
     }
 
     private static void RenderItemDetails(Transform panel, PlannedItem planned,
@@ -1108,6 +1230,7 @@ internal static class BuildCrafterController
                 _section = Section.Craft;
                 _craftView = CraftView.Loadout;
                 _selectedSlot = string.Empty;
+                ClearComparison();
                 SetStatus($"Community build imported with {build.Skills.Count:N0} allocated skills.",
                     BuildCrafterUi.Positive);
                 if (_open) Render();
@@ -1577,6 +1700,7 @@ internal static class BuildCrafterController
         _itemContextView = ItemContextView.Details;
         _selectedSlot = string.Empty;
         _selectedSkill = string.Empty;
+        ClearComparison();
         SetStatus("New unsaved build.", BuildCrafterUi.Accent);
         Render();
     }
@@ -1589,6 +1713,7 @@ internal static class BuildCrafterController
         _section = Section.Craft;
         _itemContextView = ItemContextView.Details;
         _selectedSlot = string.Empty;
+        ClearComparison();
         SetStatus($"Opened {_current.Name}.", BuildCrafterUi.Positive);
         Render();
     }
@@ -1601,6 +1726,7 @@ internal static class BuildCrafterController
         _section = Section.Craft;
         _itemContextView = ItemContextView.Details;
         _selectedSlot = string.Empty;
+        ClearComparison();
         SetStatus("Duplicated as an unsaved build.", BuildCrafterUi.Accent);
         Render();
     }
@@ -1813,6 +1939,15 @@ internal static class BuildCrafterController
         AddCatalogIconContents(frame, name, sprite);
     }
 
+    private static void AddFractionCatalogIcon(Transform parent, string name, Sprite sprite,
+        float anchorX, float top, float size)
+    {
+        GameObject frame = _ui.Rect(name + "Frame", parent,
+            new Vector2(anchorX, 1f), new Vector2(anchorX, 1f),
+            new Vector2(-size * 0.5f, top - size), new Vector2(size * 0.5f, top));
+        AddCatalogIconContents(frame, name, sprite);
+    }
+
     private static void AddCatalogIconContents(GameObject frame, string name, Sprite sprite)
     {
         Image background = _ui.Panel(frame, BuildCrafterUi.SurfaceLow);
@@ -1970,6 +2105,301 @@ internal static class BuildCrafterController
         rect.anchorMax = new Vector2(anchorMaxX, 1f);
         rect.offsetMin = new Vector2(leftInset, top - height);
         rect.offsetMax = new Vector2(-rightInset, top);
+    }
+
+    private static void CompareHoveredItem()
+    {
+        if (!TryGetHoveredComparison(out PlannedItem hovered, out BuildCatalogEntry resolved,
+            out string slot, out IReadOnlyList<string> statLines))
+        {
+            if (!_open)
+                Open();
+            SetStatus("Hover equipment or an artifact, then press the compare hotkey.",
+                BuildCrafterUi.Warning);
+            return;
+        }
+
+        _comparisonItem = hovered;
+        _comparisonResolved = resolved;
+        _comparisonSlot = slot;
+        _comparisonStatLines = statLines;
+        _section = Section.Craft;
+        _craftView = CraftView.Loadout;
+        _selectedSlot = slot;
+        _selectedSkill = string.Empty;
+        _pickerSearch = string.Empty;
+        _itemContextView = ItemContextView.Compare;
+        if (!_open)
+            Open();
+        else
+            Render();
+
+        PlannedItem planned = BuildSlots.Artifacts.Contains(slot)
+            ? (_current.Artifacts.TryGetValue(slot, out PlannedArtifact artifact) ? artifact : null)
+            : (_current.Equipment.TryGetValue(slot, out PlannedItem equipment) ? equipment : null);
+        string target = planned is null ? "an empty build slot" : DisplayName(planned);
+        SetStatus($"Comparing {DisplayName(hovered)} with {target}.", BuildCrafterUi.Positive);
+    }
+
+    private static void ClearComparison()
+    {
+        _comparisonSlot = string.Empty;
+        _comparisonItem = null;
+        _comparisonResolved = null;
+        _comparisonStatLines = Array.Empty<string>();
+        if (_itemContextView == ItemContextView.Compare)
+            _itemContextView = ItemContextView.Details;
+    }
+
+    private static bool TryGetHoveredComparison(out PlannedItem hovered,
+        out BuildCatalogEntry resolved, out string slot, out IReadOnlyList<string> statLines)
+    {
+        hovered = null;
+        resolved = null;
+        slot = string.Empty;
+        statLines = Array.Empty<string>();
+        EventSystem eventSystem = EventSystem.current;
+        if (eventSystem is null)
+            return false;
+
+        var pointer = new PointerEventData(eventSystem) { position = Input.mousePosition };
+        var hits = new Il2CppRaycastList();
+        eventSystem.RaycastAll(pointer, hits);
+        foreach (RaycastResult hit in hits)
+        {
+            GameObject target = hit.gameObject;
+            UIInventoryItem uiItem = target?.GetComponentInParent<UIInventoryItem>();
+            IInfoDrawable source = uiItem?.Data;
+            if (source is null)
+                continue;
+
+            try
+            {
+                if (source.TryCast<EquipData>() is { } equip
+                    && TryCreateEquipmentComparison(target, uiItem, equip, out hovered,
+                        out resolved, out slot, out statLines))
+                    return true;
+                if (source.TryCast<ArtifactData>() is { } artifact
+                    && TryCreateArtifactComparison(target, uiItem, artifact, out hovered,
+                        out resolved, out slot, out statLines))
+                    return true;
+            }
+            catch (Exception ex)
+            {
+                Plugin.Warning($"Could not read hovered item data: {ex.Message}");
+            }
+        }
+        return false;
+    }
+
+    private static bool TryCreateEquipmentComparison(GameObject target, UIInventoryItem uiItem,
+        EquipData equip, out PlannedItem hovered, out BuildCatalogEntry resolved, out string slot,
+        out IReadOnlyList<string> statLines)
+    {
+        hovered = null;
+        resolved = GameCatalog.Resolve(equip.Id, CatalogKind.Equipment);
+        slot = string.Empty;
+        statLines = Array.Empty<string>();
+        if (resolved is null)
+            return false;
+
+        UIEquipSlotItem equippedSlot = target?.GetComponentInParent<UIEquipSlotItem>();
+        slot = equippedSlot is null ? PreferredComparisonSlot(resolved.Slot)
+            : BuildSlot(equippedSlot.Slot);
+        if (string.IsNullOrWhiteSpace(slot) || !BuildSlots.Equipment.Contains(slot))
+            return false;
+
+        var planned = new PlannedItem
+        {
+            ItemId = resolved.Id,
+            DisplayName = resolved.Name,
+            Refine = Math.Max(0, equip.Refine),
+            Substats = CopySubstats(equip.Substats),
+            Cards = new List<string>()
+        };
+        if (equip.Cards is not null)
+        {
+            foreach (string card in equip.Cards)
+                if (!string.IsNullOrWhiteSpace(card))
+                    planned.Cards.Add(card);
+        }
+        hovered = planned;
+        statLines = NativeEquipmentStatLines(equip, uiItem);
+        return true;
+    }
+
+    private static bool TryCreateArtifactComparison(GameObject target, UIInventoryItem uiItem,
+        ArtifactData artifact, out PlannedItem hovered, out BuildCatalogEntry resolved,
+        out string slot, out IReadOnlyList<string> statLines)
+    {
+        hovered = null;
+        resolved = null;
+        statLines = Array.Empty<string>();
+        UIArtifactSlotItem equippedSlot = target?.GetComponentInParent<UIArtifactSlotItem>();
+        ArtifactSlot artifactSlot = equippedSlot is null ? artifact.Slot : equippedSlot.Slot;
+        slot = artifactSlot.ToString().ToLowerInvariant();
+        if (!BuildSlots.Artifacts.Contains(slot))
+            return false;
+
+        string id = artifact.Id ?? string.Empty;
+        resolved = GameCatalog.Resolve(id, CatalogKind.Artifact)
+            ?? GameCatalog.Resolve($"{id}:{artifactSlot}", CatalogKind.Artifact)
+            ?? GameCatalog.Find(CatalogKind.Artifact, slot, id)
+                .FirstOrDefault(entry => entry.Id.StartsWith(id + ":",
+                    StringComparison.OrdinalIgnoreCase));
+        if (resolved is null)
+            return false;
+
+        var planned = new PlannedArtifact
+        {
+            ItemId = resolved.Id,
+            DisplayName = resolved.Name,
+            Refine = Math.Max(0, artifact.Refine),
+            Substats = CopySubstats(artifact.Substats)
+        };
+        if (artifact.Gems is not null)
+        {
+            foreach (GemData gem in artifact.Gems)
+            {
+                if (gem is null || string.IsNullOrWhiteSpace(gem.Id))
+                    continue;
+                planned.GemId = gem.Id;
+                planned.GemRefine = Math.Max(0, gem.Refine);
+                break;
+            }
+        }
+        hovered = planned;
+        statLines = NativeArtifactStatLines(artifact, uiItem);
+        return true;
+    }
+
+    private static IReadOnlyList<string> NativeEquipmentStatLines(EquipData equip,
+        UIInventoryItem uiItem)
+    {
+        string description = string.Empty;
+        try
+        {
+            EquipConfig config = App.ServerRuntime?.GetEquip(equip.Id);
+            if (config is not null)
+                description = Extensions.ToDescription(equip, config, false, false);
+        }
+        catch (Exception ex)
+        {
+            Plugin.Warning($"Native equipment stat formatting failed: {ex.Message}");
+        }
+        return NativeDescriptionLines(description, uiItem);
+    }
+
+    private static IReadOnlyList<string> NativeArtifactStatLines(ArtifactData artifact,
+        UIInventoryItem uiItem)
+    {
+        string description = string.Empty;
+        try
+        {
+            string setId = artifact.Id ?? string.Empty;
+            int separator = setId.IndexOf(':');
+            if (separator >= 0)
+                setId = setId[..separator];
+            ArtifactSetConfig config = App.ServerRuntime?.GetArtifactSet(setId);
+            if (config is not null)
+                description = Extensions.ToDescription(artifact, config, false, false);
+        }
+        catch (Exception ex)
+        {
+            Plugin.Warning($"Native artifact stat formatting failed: {ex.Message}");
+        }
+        return NativeDescriptionLines(description, uiItem);
+    }
+
+    private static IReadOnlyList<string> NativeDescriptionLines(string description,
+        UIInventoryItem uiItem)
+    {
+        if (string.IsNullOrWhiteSpace(description))
+        {
+            try { description = uiItem?.Description?.text ?? string.Empty; }
+            catch { description = string.Empty; }
+        }
+        if (string.IsNullOrWhiteSpace(description))
+            return Array.Empty<string>();
+
+        string plain = RichTextBreak.Replace(description, "\n");
+        plain = RichTextTag.Replace(plain, string.Empty);
+        plain = WebUtility.HtmlDecode(plain);
+        return plain.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
+            .Select(line => line.Trim().TrimStart('•').Trim())
+            .Where(line => !string.IsNullOrWhiteSpace(line))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    private static List<ImportedSubstat> CopySubstats(
+        Il2CppSystem.Collections.Generic.List<StatData> source)
+    {
+        var result = new List<ImportedSubstat>();
+        if (source is null)
+            return result;
+        foreach (StatData stat in source)
+        {
+            if (stat is null || stat.Type == StatType.None)
+                continue;
+            result.Add(new ImportedSubstat
+            {
+                Stat = stat.Type.ToString(),
+                Base = stat.Value
+            });
+        }
+        return result;
+    }
+
+    private static string PreferredComparisonSlot(string catalogSlot) => catalogSlot switch
+    {
+        "weapon" => FirstPopulatedEquipmentSlot("mainhand", "offhand"),
+        "accessory" => FirstPopulatedEquipmentSlot("acc1", "acc2"),
+        "offhand" => "offhand",
+        "head" => "head",
+        "legs" => "legs",
+        "feet" => "feet",
+        "chest" => "chest",
+        "eyewear" => "eyewear",
+        "back" => "back",
+        _ => string.Empty
+    };
+
+    private static string FirstPopulatedEquipmentSlot(string first, string second)
+    {
+        if (_current.Equipment.TryGetValue(first, out PlannedItem firstItem)
+            && !string.IsNullOrWhiteSpace(firstItem?.ItemId))
+            return first;
+        if (_current.Equipment.TryGetValue(second, out PlannedItem secondItem)
+            && !string.IsNullOrWhiteSpace(secondItem?.ItemId))
+            return second;
+        return first;
+    }
+
+    private static string BuildSlot(EquipSlot slot) => slot switch
+    {
+        EquipSlot.Mainhand => "mainhand",
+        EquipSlot.Offhand => "offhand",
+        EquipSlot.Head => "head",
+        EquipSlot.Legs => "legs",
+        EquipSlot.Feet => "feet",
+        EquipSlot.Chest => "chest",
+        EquipSlot.AccessoryLeft => "acc1",
+        EquipSlot.AccessoryRight => "acc2",
+        EquipSlot.Eyewear => "eyewear",
+        EquipSlot.Back => "back",
+        _ => string.Empty
+    };
+
+    private static bool IsTextInputFocused()
+    {
+        try
+        {
+            GameObject selected = EventSystem.current?.currentSelectedGameObject;
+            TMP_InputField input = selected?.GetComponentInParent<TMP_InputField>();
+            return input is not null && input.isFocused;
+        }
+        catch { return false; }
     }
 
     private static bool IsBaseMenuOpen()
