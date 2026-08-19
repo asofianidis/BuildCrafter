@@ -72,7 +72,9 @@ internal static class BuildCrafterController
     private static RectTransform _windowRect;
     private static BuildCrafterUi _ui;
     private static Transform _navigationRoot;
+    private static Transform _contentHost;
     private static Transform _contentRoot;
+    private static GameObject _activeContentPage;
     private static Transform _pickerResults;
     private static Transform _localRows;
     private static Transform _communityRows;
@@ -289,19 +291,56 @@ internal static class BuildCrafterController
         _navigationRoot = navigation.transform;
         GameObject content = _ui.Rect("Content", window.transform, Vector2.zero, Vector2.one,
             new Vector2(220f, 0f), new Vector2(0f, -72f));
-        _contentRoot = content.transform;
+        _contentHost = content.transform;
     }
 
     private static void Render()
     {
         RenderNavigation();
-        BuildCrafterUi.Clear(_contentRoot);
-        _activeSearch = null;
         switch (_section)
         {
             case Section.Local: RenderLocal(); break;
             case Section.Community: RenderCommunity(); break;
             default: RenderCraft(); break;
+        }
+    }
+
+    private static void RenderContentPage(Action renderPage, string pageName)
+    {
+        if (_contentHost is null || renderPage is null)
+            return;
+
+        GameObject previous = _activeContentPage;
+        var page = new GameObject(pageName + "Page");
+        page.SetActive(false);
+        page.transform.SetParent(_contentHost, false);
+        RectTransform pageRect = page.AddComponent<RectTransform>();
+        pageRect.anchorMin = Vector2.zero;
+        pageRect.anchorMax = Vector2.one;
+        pageRect.offsetMin = Vector2.zero;
+        pageRect.offsetMax = Vector2.zero;
+        _contentRoot = page.transform;
+        _activeSearch = null;
+
+        try
+        {
+            renderPage();
+            page.SetActive(true);
+            LayoutRebuilder.ForceRebuildLayoutImmediate(pageRect);
+            Canvas.ForceUpdateCanvases();
+            if (previous is not null)
+            {
+                previous.SetActive(false);
+                Object.Destroy(previous);
+            }
+            _activeContentPage = page;
+        }
+        catch
+        {
+            page.SetActive(false);
+            Object.Destroy(page);
+            _contentRoot = previous is null ? null : previous.transform;
+            throw;
         }
     }
 
@@ -346,9 +385,10 @@ internal static class BuildCrafterController
         rect.offsetMax = new Vector2(-16f, top);
     }
 
-    private static void RenderCraft()
+    private static void RenderCraft() => RenderContentPage(RenderCraftPage, "Craft");
+
+    private static void RenderCraftPage()
     {
-        BuildCrafterUi.Clear(_contentRoot);
         _activeSearch = null;
         GameObject toolbar = _ui.Rect("CraftToolbar", _contentRoot, new Vector2(0f, 1f), Vector2.one,
             new Vector2(24f, -74f), new Vector2(-24f, -18f));
@@ -1082,9 +1122,10 @@ internal static class BuildCrafterController
         PlaceTopFraction(detail.rectTransform, minX, maxX, -204f, 66f, 10f, 10f);
     }
 
-    private static void RenderLocal()
+    private static void RenderLocal() => RenderContentPage(RenderLocalPage, "Local");
+
+    private static void RenderLocalPage()
     {
-        BuildCrafterUi.Clear(_contentRoot);
         AddPageTitle("LOCAL BUILDS", "Saved on this machine", _contentRoot);
         TMP_InputField search = _ui.Input("LocalSearch", _contentRoot, "Search saved builds...", value =>
         {
@@ -1149,9 +1190,10 @@ internal static class BuildCrafterController
         }
     }
 
-    private static void RenderCommunity()
+    private static void RenderCommunity() => RenderContentPage(RenderCommunityPage, "Community");
+
+    private static void RenderCommunityPage()
     {
-        BuildCrafterUi.Clear(_contentRoot);
         AddPageTitle("COMMUNITY BUILDS", "Public builds from spiritvalers.com", _contentRoot);
         TMP_InputField search = _ui.Input("CommunitySearch", _contentRoot,
             "Search name, class, or author...", value =>
@@ -2654,7 +2696,9 @@ internal static class BuildCrafterController
         _windowRect = null;
         _ui = null;
         _navigationRoot = null;
+        _contentHost = null;
         _contentRoot = null;
+        _activeContentPage = null;
         _pickerResults = null;
         _localRows = null;
         _communityRows = null;
